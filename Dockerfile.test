@@ -13,7 +13,8 @@ COPY backend/requirements.txt backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
 # Install test dependencies
-RUN pip install --no-cache-dir pytest pytest-asyncio
+# Added pytest-timeout to catch any hanging tests during local dev
+RUN pip install --no-cache-dir pytest pytest-asyncio pytest-timeout
 
 # Copy backend code
 COPY backend/ backend/
@@ -25,4 +26,4 @@ COPY skills/ skills/
 WORKDIR /app/backend
 
 # Run smoke tests
-CMD ["pytest", "-m", "smoke", "-v", "--tb=short"]
+CMD ["pytest", "-m", "smoke", "-v", "--tb=short", "--timeout=30"]
