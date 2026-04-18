@@ -51,6 +51,8 @@ Phase 7 transforms the AI Orchestrator from a single-shot agent system into a **
 
 > **Personal note:** I'm studying this project to learn how agentic loops work in a home-automation context. My fork may include small experiments in the reasoning harness — nothing meant for upstream.
 
+> **My fork notes:** I bumped the default reasoning loop budget cap from 10 to 15 steps locally — I found 10 too restrictive when testing multi-room automation goals that chain several tool calls. Also added a note to myself to look into whether parallel tool execution can be made optional via config (sometimes serial is easier to debug).
+
 ---
 
 ## 2. Architecture Overview
@@ -60,8 +62,5 @@ Phase 7 transforms the AI Orchestrator from a single-shot agent system into a **
                          |   React Dashboard     |
                          |  (ReasoningPanel,     |
                          |   ReasoningTrace)     |
-                         +----------+------------+
-                                    | WebSocket (reasoning_event)
-                                    v
-+------------------+    +----------------------+    +----
+         
 ```
