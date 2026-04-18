@@ -53,6 +53,8 @@ smart_model: "deepseek-r1:8b"         # Complex Agents (Reasoning)
 fast_model: "mistral:7b-instruct"     # Fast Agents (Execution)
 ```
 
+> **Personal note:** I'm running Ollama on a separate machine at 192.168.1.50, so I set `ollama_host` to `http://192.168.1.50:11434`. Also switched `fast_model` to `phi3:mini` since it runs noticeably faster on my setup than mistral.
+
 #### 4. Start
 Click **Start**. Monitor the **Log** tab.
 
@@ -81,60 +83,4 @@ Navigate to: `http://homeassistant.local:8999`
 
 ### 2. Creating Your First Agent (No-Code)
 1. Click the **(+) New Agent** button (bottom right).
-2. Valid "Suggested" agents based on your devices will appear.
-3. **Or Chat**: "Make a bot that turns on the porch light at sunset."
-4. The **Architect** will draft a plan.
-5. Click **Approve & Deploy**.
-6. Restart the add-on to activate the new agent.
-
-### 3. Advanced Configuration (YAML)
-For power users, edit `agents.yaml` in the `/addon_configs` (or mapped) directory:
-
-```yaml
-agents:
-  - id: "my_custom_agent"
-    name: "Lab Manager"
-    entities: [sensor.lab_temp, switch.3d_printer]
-    instruction: "Turn off printer if temp > 30C."
-```
-
----
-
-## 🧠 Adding Knowledge (RAG)
-To make your agents smarter, drop PDF manuals or Markdown files into:
-`/addon_configs/ai-orchestrator/manuals/` (or `/data/manuals` depending on mapping).
-
-The system automatically ingests them on startup. Agents will search these files before making decisions.
-
----
-
-## 🧪 Verification Checklist
-
-### ✅ Startup
-- [ ] Dashboard Loads (Green "Connected" badge).
-- [ ] "Architect Agent initialized" in logs.
-
-### ✅ RAG
-- [ ] Drop a dummy PDF in `/data/manuals`.
-- [ ] Restart. Log should say "Ingesting...".
-
-### ✅ Factory
-- [ ] Create a "Test Agent" via the Dashboard Wizard.
-- [ ] Verify it appears in `agents.yaml`.
-
----
-
-## ⚠️ Safety & Production
-1. **Dry Run**: Keep `dry_run_mode: true` initially. Agents will *log* actions but not execute them.
-2. **Go Live**: Set `dry_run_mode: false` in config when confident.
-3. **Approval Queue**: High-impact actions (unlocking doors) require manual approval via the API/Dashboard (Phase 2 feature).
-
----
-**Technical Support**:
-Check `/data/logs/orchestrator.log` for detailed debugging.
-
-### Ingress / Blank Dashboard Issues
-If you see a blank dashboard:
-1.  **Check Logs**: Look for `DEBUG REQUEST`. If you see `/hassio/ingress/...`, the path fix is working.
-2.  **Hard Refresh**: `Ctrl+F5` to clear browser cache of old JS files.
-3.  **MIME Types**: Ensure your HA host isn't blocking `.js` files (rare, but possible).
+2. Valid "Suggested" agents bas
