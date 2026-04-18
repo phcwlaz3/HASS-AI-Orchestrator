@@ -1,0 +1,18 @@
+name: security_check
+description: Sweep all security-relevant entities and surface anything notable.
+arguments: []
+template: |
+  Run a security sweep of the home.
+
+  Steps:
+  1. Discover all binary_sensor, lock, alarm_control_panel, cover and
+     person entities using `ha_list_entities` (one call per domain).
+  2. Identify anything in a non-default state: doors/windows open,
+     locks unlocked, alarms disarmed, anyone marked "not_home", any
+     entity reported as "unavailable".
+  3. Cross-reference with people: if everyone is away, surface any
+     entity that suggests the house isn't actually empty.
+  4. Output a clear status (GREEN / AMBER / RED) plus a short bullet
+     list of what to investigate.
+
+  Read-only; do not change state.

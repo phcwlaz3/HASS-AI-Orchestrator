@@ -1,0 +1,15 @@
+name: nightly_review
+description: End-of-day summary plus a tidy-up plan (lights off, doors locked, climate set back).
+arguments: []
+template: |
+  Run the nightly tidy-up review.
+
+  Steps:
+  1. Use `ha_list_entities` to find lights that are still on, doors
+     unlocked, climate running unnecessarily, and any media_player
+     still active.
+  2. Use `ha_search_entities` for "person" to check who's home.
+  3. Propose a concrete plan: which lights to turn off, which doors
+     to lock, what climate setback to apply, and any shortcuts
+     (scene/script) that already exist.
+  4. Surface the plan; do not execute. The PAE layer handles approval.

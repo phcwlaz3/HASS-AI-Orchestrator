@@ -1,0 +1,19 @@
+name: home_audit
+description: Whole-house health check — discover what's on, what's anomalous, what to investigate.
+arguments:
+  - name: focus
+    description: Optional area or domain to zoom in on (e.g. "kitchen", "lights").
+    required: false
+template: |
+  Perform a quick audit of the home's current state.
+
+  Steps:
+  1. Use `ha_list_domains` to see what kinds of entities exist.
+  2. Use `ha_list_entities` to scan for anything in an unusual state
+     (e.g. lights left on, doors unlocked, devices unavailable).
+  3. If `{focus}` is non-empty, focus the audit on entities matching
+     "{focus}" and use `ha_summarise_area` for a structured view.
+  4. Summarise findings in plain English with a short list of
+     concrete follow-ups (no more than 5).
+
+  Do not change any state; this is read-only.

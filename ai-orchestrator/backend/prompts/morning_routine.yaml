@@ -1,0 +1,17 @@
+name: morning_routine
+description: Prepare the house for the morning — lights, climate, blinds, shortcuts.
+arguments:
+  - name: wake_time
+    description: Approximate wake time, e.g. "07:00". Defaults to "now".
+    required: false
+template: |
+  Prepare the house for the morning routine starting around {wake_time}.
+
+  Steps:
+  1. Inspect current state of bedroom and main living-area lights,
+     climate, and any covers/blinds (use `ha_summarise_area` plus
+     `ha_list_entities`).
+  2. Propose a sequence: warm bedroom climate, gentle wake lighting,
+     open blinds, prep kitchen lights, etc. Tailor to what actually
+     exists in this home — don't invent entities.
+  3. Surface the plan; do not execute. The PAE layer will confirm.

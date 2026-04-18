@@ -1,0 +1,19 @@
+name: energy_optimizer
+description: Identify opportunities to reduce energy use right now.
+arguments:
+  - name: window
+    description: Time window to consider, e.g. "right now", "next 2 hours". Defaults to right now.
+    required: false
+template: |
+  Find energy-saving opportunities for the window: {window}.
+
+  Steps:
+  1. List active light, climate, switch and media_player entities
+     using `ha_list_entities`.
+  2. For each non-trivial consumer, check whether it is needed right
+     now (e.g. lights on in unoccupied areas, climate fighting an
+     open window, media playing with no listener nearby).
+  3. Propose a concrete, ranked list of changes. Each item should
+     name the entity_id, the proposed action, and the rough rationale.
+  4. Do NOT call mutating services directly. Surface the plan; the
+     plan-approve-execute layer will handle approvals.

@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "0.9.47",
+    "version": "0.10.0",
     "slug": "ai-orchestrator",
-    "description": "Phase 6: Universal Agents, RAG, and No-Code Factory for Home Assistant",
+    "description": "Phase 8: Self-contained reasoning + memory + plan-approve-execute + triggers + streaming + native prompt library (no external MCP prerequisite)",
     "url": "https://github.com/ITSpecialist111/HASS-AI-Orchestrator",
     "arch": [
         "amd64",
@@ -42,7 +42,14 @@
         "disable_telemetry": true,
         "gemini_api_key": "",
         "use_gemini_for_dashboard": false,
-        "gemini_model_name": "gemini-robotics-er-1.5-preview"
+        "gemini_model_name": "gemini-robotics-er-1.5-preview",
+        "mcp_server_url": "",
+        "mcp_server_token": "",
+        "deep_reasoning_model": "qwen2.5:14b-instruct",
+        "deep_reasoning_max_iterations": 12,
+        "anthropic_api_key": "",
+        "anthropic_model": "claude-opus-4-7",
+        "api_token": ""
     },
     "schema": {
         "ollama_host": "str",
@@ -63,6 +70,13 @@
         "disable_telemetry": "bool",
         "gemini_api_key": "str?",
         "use_gemini_for_dashboard": "bool",
-        "gemini_model_name": "str"
+        "gemini_model_name": "str",
+        "mcp_server_url": "str?",
+        "mcp_server_token": "str?",
+        "deep_reasoning_model": "str",
+        "deep_reasoning_max_iterations": "int(1,40)",
+        "anthropic_api_key": "str?",
+        "anthropic_model": "str",
+        "api_token": "str?"
     }
 }
