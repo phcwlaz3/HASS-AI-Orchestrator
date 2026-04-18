@@ -135,21 +135,21 @@ class TestApprovalQueueSmoke:
     """Smoke tests for approval queue"""
     
     @pytest.mark.asyncio
-    async def test_approval_queue_initialization(self):
+    async def test_approval_queue_initialization(self, tmp_path):
         """Test approval queue initializes with database"""
         from approval_queue import ApprovalQueue
-        
-        queue = ApprovalQueue(db_path=":memory:")
+
+        queue = ApprovalQueue(db_path=str(tmp_path / "test_approvals.db"))
         assert queue is not None
         assert queue.auto_approval_rules is not None
-    
+
     @pytest.mark.asyncio
-    async def test_auto_approval_lighting(self):
+    async def test_auto_approval_lighting(self, tmp_path):
         """Test lighting actions auto-approve"""
         from approval_queue import ApprovalQueue
-        
-        queue = ApprovalQueue(db_path=":memory:")
-        
+
+        queue = ApprovalQueue(db_path=str(tmp_path / "test_approvals.db"))
+
         request = await queue.add_request(
             agent_id="lighting",
             action_type="turn_on_light",
@@ -157,17 +157,17 @@ class TestApprovalQueueSmoke:
             impact_level="low",
             reason="Occupancy detected"
         )
-        
+
         assert request.status == "approved"
         assert request.approved_by == "system"
-    
+
     @pytest.mark.asyncio
-    async def test_requires_approval_security(self):
+    async def test_requires_approval_security(self, tmp_path):
         """Test security unlock requires approval"""
         from approval_queue import ApprovalQueue
-        
-        queue = ApprovalQueue(db_path=":memory:")
-        
+
+        queue = ApprovalQueue(db_path=str(tmp_path / "test_approvals.db"))
+
         request = await queue.add_request(
             agent_id="security",
             action_type="unlock_door",
@@ -175,16 +175,16 @@ class TestApprovalQueueSmoke:
             impact_level="critical",
             reason="User arriving home"
         )
-        
+
         assert request.status == "pending"
         assert request.approved_by is None
-    
+
     @pytest.mark.asyncio
-    async def test_approve_request(self):
+    async def test_approve_request(self, tmp_path):
         """Test manual approval workflow"""
         from approval_queue import ApprovalQueue
-        
-        queue = ApprovalQueue(db_path=":memory:")
+
+        queue = ApprovalQueue(db_path=str(tmp_path / "test_approvals.db"))
         
         request = await queue.add_request(
             agent_id="security",
@@ -272,30 +272,36 @@ class TestEnhancedMCPSmoke:
     """Smoke tests for new MCP tools"""
     
     @pytest.mark.asyncio
-    async def test_mcp_has_11_tools(self, mock_ha_client):
-        """Test MCP server has 11 tools (3 Phase 1 + 8 Phase 2)"""
+    async def test_mcp_has_15_tools(self, mock_ha_client):
+        """Test MCP server has 15 tools (3 Phase 1 + 8 Phase 2 + 4 Phase 3+)"""
         from mcp_server import MCPServer
         
         mcp = MCPServer(mock_ha_client, dry_run=True)
         
-        assert len(mcp.tools) == 11
-        
+        assert len(mcp.tools) == 15
+
         # Verify Phase 1 tools
         assert "set_temperature" in mcp.tools
         assert "get_climate_state" in mcp.tools
         assert "set_hvac_mode" in mcp.tools
-        
+
         # Verify Phase 2 lighting tools
         assert "turn_on_light" in mcp.tools
         assert "turn_off_light" in mcp.tools
         assert "set_brightness" in mcp.tools
         assert "set_color_temp" in mcp.tools
-        
+
         # Verify Phase 2 security tools
         assert "set_alarm_state" in mcp.tools
         assert "lock_door" in mcp.tools
         assert "unlock_door" in mcp.tools
         assert "enable_camera" in mcp.tools
+
+        # Verify Phase 3+ tools
+        assert "search_knowledge_base" in mcp.tools
+        assert "call_ha_service" in mcp.tools
+        assert "log" in mcp.tools
+        assert "get_state" in mcp.tools
     
     @pytest.mark.asyncio
     async def test_turn_on_light_dry_run(self, mock_ha_client):

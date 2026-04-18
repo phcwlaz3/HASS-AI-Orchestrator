@@ -1,5 +1,8 @@
 
+import logging
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+logger = logging.getLogger(__name__)
 
 class IngressMiddleware:
     def __init__(self, app: ASGIApp):
@@ -57,7 +60,7 @@ class IngressMiddleware:
                     scope["path"] = path
 
             if path != original_path:
-                print(f"DEBUG REWRITE: {original_path} -> {path} (Ingress: {ingress_path})", flush=True)
+                logger.debug("REWRITE: %s -> %s (Ingress: %s)", original_path, path, ingress_path)
                 scope["path"] = path
         
         await self.app(scope, receive, send)

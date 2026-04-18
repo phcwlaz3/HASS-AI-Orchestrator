@@ -22,15 +22,17 @@ import json
 import asyncio
 import httpx
 import socket
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, StreamingResponse
+
 from pydantic import BaseModel
-from starlette.types import Scope, Receive, Send
+from starlette.types import ASGIApp, Scope, Receive, Send
 
 # Wrapper to prevent StaticFiles from crashing on WebSocket requests
 class SafeStaticFiles(StaticFiles):
@@ -102,7 +104,56 @@ from agents.architect_agent import ArchitectAgent
 from analytics import router as analytics_router
 from factory_router import router as factory_router
 from ingress_middleware import IngressMiddleware
+from external_mcp import ExternalMCPClient
+from agents.deep_reasoning_agent import DeepReasoningAgent
+from memory_store import MemoryStore
+from native_prompts import NativePromptLibrary
+from plan_executor import PlanStore
+from triggers import TriggerRegistry, TriggerSpec, TriggerStore, CronExpr
 import yaml
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+# API token for optional bearer auth (read at startup, applied via middleware)
+_api_token: Optional[str] = None
+
+
+class APIAuthMiddleware:
+    """Optional bearer-token gate on /api/* routes.
+
+    If ``api_token`` is configured, every request to ``/api/`` must include
+    ``Authorization: Bearer <token>``.  Requests arriving through HA Ingress
+    (identified by ``X-Ingress-Path`` header) are trusted automatically.
+    Static assets and the WebSocket endpoint are always open.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and _api_token:
+            path: str = scope.get("path", "")
+            if path.startswith("/api/"):
+                headers = dict(scope.get("headers", []))
+                # Trust HA Ingress requests
+                is_ingress = any(
+                    k.decode("latin-1").lower() == "x-ingress-path"
+                    for k, _v in scope.get("headers", [])
+                )
+                if not is_ingress:
+                    auth = None
+                    for k, v in scope.get("headers", []):
+                        if k.decode("latin-1").lower() == "authorization":
+                            auth = v.decode("latin-1")
+                            break
+                    if auth != f"Bearer {_api_token}":
+                        from starlette.responses import JSONResponse
+                        resp = JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                        await resp(scope, receive, send)
+                        return
+        await self.app(scope, receive, send)
 
 
 # Global state
@@ -112,6 +163,10 @@ approval_queue: Optional[ApprovalQueue] = None
 orchestrator: Optional[Orchestrator] = None
 rag_manager: Optional[RagManager] = None
 knowledge_base: Optional[KnowledgeBase] = None
+external_mcp: Optional[ExternalMCPClient] = None
+deep_reasoner: Optional[DeepReasoningAgent] = None
+trigger_registry: Optional[TriggerRegistry] = None
+native_prompts: Optional[NativePromptLibrary] = None
 agents: Dict[str, object] = {}
 dashboard_clients: List[WebSocket] = []
 
@@ -197,9 +252,23 @@ async def lifespan(app: FastAPI):
                 gemini_api_key_opt = opts.get("gemini_api_key", "").strip()
                 use_gemini_dashboard_opt = opts.get("use_gemini_for_dashboard", False)
                 gemini_model_name_opt = opts.get("gemini_model_name", "gemini-1.5-pro")
-                
-                print(f"DEBUG: Read dry_run={dry_run}, disable_telemetry={disable_telemetry}, has_token={bool(ha_access_token_opt)} from options.json")
-                print(f"DEBUG: Gemini: has_key={bool(gemini_api_key_opt)}, use_for_dash={use_gemini_dashboard_opt}, model={gemini_model_name_opt}")
+
+                # Deep reasoning / external MCP options (Phase 7)
+                mcp_server_url_opt = opts.get("mcp_server_url", "").strip()
+                mcp_server_token_opt = opts.get("mcp_server_token", "").strip()
+                deep_reasoning_model_opt = opts.get("deep_reasoning_model", "qwen2.5:14b-instruct")
+                anthropic_api_key_opt = opts.get("anthropic_api_key", "").strip()
+                anthropic_model_opt = opts.get("anthropic_model", "claude-opus-4-7").strip()
+                deep_reasoning_max_iter_opt = int(opts.get("deep_reasoning_max_iterations", 12) or 12)
+
+                # API auth token (Phase 7 Milestone B)
+                global _api_token
+                _api_token_opt = opts.get("api_token", "").strip()
+                if _api_token_opt:
+                    _api_token = _api_token_opt
+
+                logger.debug("Read dry_run=%s, disable_telemetry=%s, has_token=%s from options.json", dry_run, disable_telemetry, bool(ha_access_token_opt))
+                logger.debug("Gemini: has_key=%s, use_for_dash=%s, model=%s", bool(gemini_api_key_opt), use_gemini_dashboard_opt, gemini_model_name_opt)
         except Exception as e:
             print(f"⚠️ Failed to read options.json: {e}")
             # Fallback to env var
@@ -210,11 +279,13 @@ async def lifespan(app: FastAPI):
         gemini_api_key_opt = os.getenv("GEMINI_API_KEY", "")
         use_gemini_dashboard_opt = os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true"
         gemini_model_name_opt = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+        # API token from env
+        _api_token = os.getenv("API_TOKEN", "").strip() or None
 
     # Diagnostics
-    print(f"DEBUG: ENV - SUPERVISOR_TOKEN: {bool(os.getenv('SUPERVISOR_TOKEN'))}")
-    print(f"DEBUG: ENV - HA_URL: {os.getenv('HA_URL')}")
-    print(f"DEBUG: ENV - HA_ACCESS_TOKEN: {bool(os.getenv('HA_ACCESS_TOKEN'))}")
+    logger.debug("ENV - SUPERVISOR_TOKEN: %s", bool(os.getenv('SUPERVISOR_TOKEN')))
+    logger.debug("ENV - HA_URL: %s", os.getenv('HA_URL'))
+    logger.debug("ENV - HA_ACCESS_TOKEN: %s", bool(os.getenv('HA_ACCESS_TOKEN')))
 
     # If we are in an add-on, we MUST use the supervisor Proxy ONLY if the token is present.
     # Otherwise, fallback to Direct Core Access.
@@ -224,14 +295,14 @@ async def lifespan(app: FastAPI):
     ha_url = os.getenv("HA_URL")
     if is_addon and supervisor_token:
         ha_url = "http://supervisor/core"
-        print(f"DEBUG: Add-on environment detected with Supervisor Token. Using Proxy: {ha_url}")
+        logger.debug("Add-on environment detected with Supervisor Token. Using Proxy: %s", ha_url)
     elif is_addon:
         # Fallback to internal DNS if supervisor token is missing
         ha_url = ha_url or "http://homeassistant:8123"
-        print(f"DEBUG: Add-on environment detected but NO Supervisor Token. Falling back to Direct Access: {ha_url}")
+        logger.debug("Add-on environment detected but NO Supervisor Token. Falling back to Direct Access: %s", ha_url)
     elif not ha_url:
         ha_url = "http://homeassistant.local:8123"
-        print(f"DEBUG: No HA_URL set and not in add-on. Defaulting to {ha_url}")
+        logger.debug("No HA_URL set and not in add-on. Defaulting to %s", ha_url)
 
     # Try to use a specific Long-Lived Access Token if provided, otherwise fallback to Supervisor Token
     ha_token = os.getenv("HA_ACCESS_TOKEN", "").strip() or ha_access_token_opt
@@ -243,11 +314,11 @@ async def lifespan(app: FastAPI):
         # Ensure we have a token (either manually provided or supervisor)
         if not ha_token:
              ha_token = supervisor_token
-        print(f"DEBUG: Using Supervisor Proxy Mode (LLAT priority: {bool(ha_access_token_opt)})")
+        logger.debug("Using Supervisor Proxy Mode (LLAT priority: %s)", bool(ha_access_token_opt))
     else:
         # Direct Core Access Mode
         header_token = None
-        print(f"DEBUG: Using Direct Core Access Mode (Token present: {bool(ha_token)})")
+        logger.debug("Using Direct Core Access Mode (Token present: %s)", bool(ha_token))
 
     ha_client = HAWebSocketClient(
         ha_url=ha_url,
@@ -397,13 +468,110 @@ async def lifespan(app: FastAPI):
     architect = ArchitectAgent(lambda: ha_client, rag_manager=rag_manager)
     app.state.architect = architect
     print("✓ Architect Agent initialized")
-    
+
+    # 9. Initialize External MCP client + Deep Reasoning Agent (Phase 7)
+    global external_mcp, deep_reasoner
+    mcp_url = locals().get("mcp_server_url_opt", "") or os.getenv("MCP_SERVER_URL", "")
+    mcp_token = locals().get("mcp_server_token_opt", "") or os.getenv("MCP_SERVER_TOKEN", "")
+    deep_model = locals().get("deep_reasoning_model_opt", "") or os.getenv("DEEP_REASONING_MODEL", "qwen2.5:14b-instruct")
+    anthropic_key = locals().get("anthropic_api_key_opt", "") or os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_model = locals().get("anthropic_model_opt", "") or os.getenv("ANTHROPIC_MODEL", "claude-opus-4-7")
+    max_iter = int(locals().get("deep_reasoning_max_iter_opt", 12) or 12)
+
+    if mcp_url:
+        external_mcp = ExternalMCPClient(url=mcp_url, token=mcp_token or None, name="external_mcp")
+        ok = await external_mcp.connect()
+        if ok:
+            print(f"✓ External MCP connected: {mcp_url} ({len(external_mcp.tools)} tools)")
+        else:
+            print(f"⚠️ External MCP not connected ({mcp_url}); deep reasoning will run with local tools only")
+    else:
+        print("ℹ️ No mcp_server_url configured; deep reasoning will run with local tools only")
+
+    try:
+        memory_store = MemoryStore(rag_manager) if rag_manager is not None else None
+        try:
+            plan_store = PlanStore()
+        except Exception as exc:
+            logger.warning("Failed to initialise PlanStore, plan mode disabled: %s", exc)
+            plan_store = None
+        deep_reasoner = DeepReasoningAgent(
+            local_mcp=mcp_server,
+            external_mcp=external_mcp,
+            ha_client=ha_client,
+            ollama_model=deep_model,
+            ollama_host=os.getenv("OLLAMA_HOST"),
+            anthropic_api_key=anthropic_key or None,
+            anthropic_model=anthropic_model,
+            max_iterations=max_iter,
+            broadcast_func=broadcast_to_dashboard,
+            memory_store=memory_store,
+            plan_store=plan_store,
+            default_mode=os.getenv("REASONING_DEFAULT_MODE", "auto"),
+        )
+        app.state.deep_reasoner = deep_reasoner
+        orchestrator.deep_reasoner = deep_reasoner
+        print(f"✓ Deep Reasoning Agent initialized (backend={deep_reasoner.llm.name}, tools={len(deep_reasoner.registry.names())}, memory={'on' if memory_store and memory_store.enabled else 'off'}, plans={'on' if plan_store else 'off'}, mode={deep_reasoner.default_mode})")
+    except Exception as e:
+        print(f"⚠️ Failed to initialize Deep Reasoning Agent: {e}")
+
+    # ----------------------------------------------------------------
+    # Phase 8.5 — native prompt library (always-available workflows)
+    # ----------------------------------------------------------------
+    global native_prompts
+    try:
+        builtin_dir = Path(__file__).parent / "prompts"
+        user_dir_str = os.getenv("PROMPTS_DIR", "/data/prompts")
+        user_dir = Path(user_dir_str)
+        native_prompts = NativePromptLibrary(builtin_dir, user_dir)
+        app.state.native_prompts = native_prompts
+        print(f"✓ Native prompt library loaded ({len(native_prompts.list())} prompts)")
+    except Exception as e:
+        print(f"⚠️ Failed to load native prompt library: {e}")
+        native_prompts = None
+
+    # ----------------------------------------------------------------
+    # Phase 8 / Milestone F — proactive triggers
+    # ----------------------------------------------------------------
+    global trigger_registry
+    if deep_reasoner is not None:
+        try:
+            trigger_store = TriggerStore()
+
+            async def _trigger_reasoner_call(goal: str, context: dict):
+                # Triggers always go through plan/auto so the PAE
+                # safety net (Milestone E) gates anything dangerous.
+                return await deep_reasoner.run(goal, context, mode="auto")
+
+            trigger_registry = TriggerRegistry(
+                store=trigger_store,
+                reasoner_callback=_trigger_reasoner_call,
+                ha_client=ha_client,
+                broadcast_func=broadcast_to_dashboard,
+            )
+            await trigger_registry.start()
+            app.state.trigger_registry = trigger_registry
+            print(f"✓ TriggerRegistry started ({len(trigger_registry.list())} configured)")
+        except Exception as e:
+            print(f"⚠️ Failed to initialise TriggerRegistry: {e}")
+            trigger_registry = None
+
     print("✅ AI Orchestrator (Phase 6) ready!")
-    
+
     yield
-    
+
     # Shutdown
     print("🛑 Shutting down AI Orchestrator...")
+    if trigger_registry:
+        try:
+            await trigger_registry.stop()
+        except Exception as e:
+            print(f"⚠️ Trigger registry stop error: {e}")
+    if external_mcp:
+        try:
+            await external_mcp.aclose()
+        except Exception as e:
+            print(f"⚠️ External MCP close error: {e}")
     if ha_client:
         await ha_client.disconnect()
     print("✅ Shutdown complete")
@@ -430,6 +598,7 @@ app.include_router(factory_router)
 # Removed broken @app.middleware("http") which caused WS to crash
 # The fix is now in ingress_middleware.py loaded below
 app.add_middleware(IngressMiddleware)
+app.add_middleware(APIAuthMiddleware)
 
 
 @app.get("/api/health")
@@ -455,6 +624,494 @@ async def chat_with_orchestrator(req: ChatRequest):
     
     return await orchestrator.process_chat_request(req.message)
 
+
+class ReasoningRequest(BaseModel):
+    """Goal payload for the deep reasoning agent."""
+    goal: str
+    context: Optional[Dict] = None
+    mode: Optional[str] = None  # "auto" | "plan" | "execute"
+
+
+@app.get("/api/reasoning/info")
+async def reasoning_info():
+    """Status & tool surface of the deep reasoning agent."""
+    if not deep_reasoner:
+        raise HTTPException(status_code=503, detail="Deep reasoning agent not ready")
+    return deep_reasoner.info()
+
+
+@app.post("/api/reasoning/run")
+async def reasoning_run(req: ReasoningRequest):
+    """Run the deep reasoning harness on a free-form goal.
+
+    Returns the final answer plus a step-by-step trace of the
+    reasoning loop (thoughts, tool calls, tool results).
+    """
+    if not deep_reasoner:
+        raise HTTPException(status_code=503, detail="Deep reasoning agent not ready")
+    if not req.goal or not req.goal.strip():
+        raise HTTPException(status_code=400, detail="goal must not be empty")
+    if req.mode is not None and req.mode not in ("auto", "plan", "execute"):
+        raise HTTPException(status_code=400, detail="mode must be one of auto|plan|execute")
+    result = await deep_reasoner.run(req.goal, req.context, mode=req.mode)
+    return {
+        "run_id": getattr(result, "run_id", None),
+        "episode_id": getattr(result, "episode_id", None),
+        "mode": getattr(result, "mode", "execute"),
+        "plan": getattr(result, "plan", None),
+        "executed_inline": getattr(result, "executed_inline", False),
+        "execution_results": getattr(result, "execution_results", None),
+        "answer": result.answer,
+        "iterations": result.iterations,
+        "tool_calls": result.tool_calls,
+        "stopped_reason": result.stopped_reason,
+        "duration_ms": result.duration_ms,
+        "recalled": getattr(result, "recalled", []),
+        "trace": [
+            {
+                "iteration": s.iteration,
+                "thought": s.thought,
+                "tool_calls": s.tool_calls,
+                "tool_results": s.tool_results,
+                "duration_ms": s.duration_ms,
+            }
+            for s in result.trace
+        ],
+    }
+
+
+@app.post("/api/reasoning/stream")
+async def reasoning_stream(req: ReasoningRequest):
+    """Run the deep reasoning agent with Server-Sent Events output.
+
+    The response is ``text/event-stream``; each event has a ``data:``
+    line with a JSON-encoded payload. Event types include
+    ``start``, ``thought``, ``tool_call``, ``recall``, ``plan``,
+    ``final``, ``error``, plus periodic ``ping`` keep-alives.
+    """
+    if not deep_reasoner:
+        raise HTTPException(status_code=503, detail="Deep reasoning agent not ready")
+    if not req.goal or not req.goal.strip():
+        raise HTTPException(status_code=400, detail="goal must not be empty")
+    if req.mode is not None and req.mode not in ("auto", "plan", "execute"):
+        raise HTTPException(status_code=400, detail="mode must be one of auto|plan|execute")
+
+    async def _gen():
+        try:
+            async for event in deep_reasoner.run_streaming(req.goal, req.context, mode=req.mode):
+                payload = json.dumps(event, default=str)
+                yield f"event: {event.get('type', 'message')}\ndata: {payload}\n\n"
+        except Exception as exc:
+            err = json.dumps({"type": "error", "error": str(exc)})
+            yield f"event: error\ndata: {err}\n\n"
+        # Final terminator so EventSource clients know we're done.
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# MCP prompt catalog (Milestone G2) + native built-in prompts (Phase 8.5)
+# ---------------------------------------------------------------------------
+@app.get("/api/reasoning/prompts")
+async def reasoning_prompts():
+    """List prompts available to the reasoning agent.
+
+    Returns the union of:
+      * **Native built-in prompts** shipped with the add-on (always
+        available — no external server required).
+      * **External MCP prompts** discovered on a connected MCP server,
+        if one is configured.
+
+    Each entry carries a ``source`` field (``"native"`` or ``"external"``)
+    so the dashboard can group / label them.
+    """
+    prompts: List[Dict[str, Any]] = []
+    native_count = 0
+    if native_prompts is not None:
+        for spec in native_prompts.list():
+            d = spec.to_dict()
+            prompts.append(d)
+            native_count += 1
+    external_connected = bool(external_mcp and external_mcp.connected)
+    if external_connected:
+        for p in external_mcp.prompt_specs():
+            entry = dict(p)
+            entry["source"] = "external"
+            # Avoid surprising shadowing: prefix duplicates with ``ext_``
+            # while keeping the original visible.
+            if any(x["name"] == entry["name"] for x in prompts):
+                entry["name"] = f"ext_{entry['name']}"
+            prompts.append(entry)
+    return {
+        "prompts": prompts,
+        "native_count": native_count,
+        "external_connected": external_connected,
+        "external_server": external_mcp.name if external_connected else None,
+        # Backwards-compat alias for the dashboard:
+        "connected": external_connected,
+        "server": external_mcp.name if external_connected else None,
+    }
+
+
+class PromptRunRequest(BaseModel):
+    arguments: Optional[Dict[str, Any]] = None
+    mode: Optional[str] = None
+    extra_context: Optional[Dict[str, Any]] = None
+    stream: bool = False
+
+
+def _resolve_prompt(name: str, arguments: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Render a prompt by name, trying native first, then external MCP.
+
+    Returns ``{ok, text, ...}`` from whichever source matched. The
+    ``ext_`` prefix added by the catalog endpoint for shadowed names is
+    stripped before checking the external server.
+    """
+    if native_prompts is not None:
+        spec = native_prompts.get(name)
+        if spec is not None:
+            return native_prompts.render(name, arguments or {})
+    if external_mcp and external_mcp.connected:
+        ext_name = name[4:] if name.startswith("ext_") else name
+        # Fall through to external_mcp.get_prompt asynchronously in
+        # the caller; this helper only resolves native synchronously.
+    return {"ok": False, "error": f"unknown_prompt:{name}"}
+
+
+async def _render_any_prompt(name: str, arguments: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Async resolver covering both native and external prompts."""
+    if native_prompts is not None:
+        spec = native_prompts.get(name)
+        if spec is not None:
+            return native_prompts.render(name, arguments or {})
+    if external_mcp and external_mcp.connected:
+        ext_name = name[4:] if name.startswith("ext_") else name
+        ext_specs = external_mcp.prompt_specs()
+        if any((p.get("name") if isinstance(p, dict) else getattr(p, "name", None)) == ext_name
+               for p in ext_specs):
+            return await external_mcp.get_prompt(ext_name, arguments or {})
+    return {"ok": False, "error": f"unknown_prompt:{name}"}
+
+
+@app.post("/api/reasoning/prompts/{name}/render")
+async def reasoning_prompt_render(name: str, req: PromptRunRequest):
+    """Render a prompt to text without invoking the reasoner."""
+    rendered = await _render_any_prompt(name, req.arguments or {})
+    if not rendered.get("ok"):
+        err = rendered.get("error", "render_failed")
+        status = 404 if err.startswith("unknown_prompt") else 400
+        raise HTTPException(status_code=status, detail=err)
+    return rendered
+
+
+@app.post("/api/reasoning/prompts/{name}/run")
+async def reasoning_prompt_run(name: str, req: PromptRunRequest):
+    """Render a prompt (native or external) and run it as a reasoning goal.
+
+    Set ``stream=true`` for SSE streaming; otherwise blocks and
+    returns the same shape as ``/api/reasoning/run``.
+    """
+    if not deep_reasoner:
+        raise HTTPException(status_code=503, detail="Deep reasoning agent not ready")
+    rendered = await _render_any_prompt(name, req.arguments or {})
+    if not rendered.get("ok"):
+        err = rendered.get("error", "render_failed")
+        status = 404 if err.startswith("unknown_prompt") else 400
+        raise HTTPException(status_code=status, detail=err)
+
+    goal = rendered.get("text") or ""
+    if not goal.strip():
+        raise HTTPException(status_code=400, detail="rendered prompt is empty")
+    context: Dict[str, Any] = {
+        "prompt_name": name,
+        "prompt_arguments": req.arguments or {},
+        "prompt_source": rendered.get("source", "external"),
+    }
+    if req.extra_context:
+        context.update(req.extra_context)
+
+    if req.stream:
+        async def _gen():
+            try:
+                async for event in deep_reasoner.run_streaming(goal, context, mode=req.mode):
+                    payload = json.dumps(event, default=str)
+                    yield f"event: {event.get('type', 'message')}\ndata: {payload}\n\n"
+            except Exception as exc:
+                err = json.dumps({"type": "error", "error": str(exc)})
+                yield f"event: error\ndata: {err}\n\n"
+            yield "event: done\ndata: {}\n\n"
+
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        )
+
+    result = await deep_reasoner.run(goal, context, mode=req.mode)
+    return {
+        "run_id": getattr(result, "run_id", None),
+        "prompt": name,
+        "mode": getattr(result, "mode", "execute"),
+        "answer": result.answer,
+        "iterations": result.iterations,
+        "tool_calls": result.tool_calls,
+        "stopped_reason": result.stopped_reason,
+        "duration_ms": result.duration_ms,
+        "plan": getattr(result, "plan", None),
+        "executed_inline": getattr(result, "executed_inline", False),
+        "execution_results": getattr(result, "execution_results", None),
+    }
+
+
+class FeedbackRequest(BaseModel):
+    """Human feedback on a past reasoning run."""
+    rating: int  # -1, 0, +1
+    note: Optional[str] = None
+@app.post("/api/reasoning/runs/{run_id}/feedback")
+async def reasoning_feedback(run_id: str, req: FeedbackRequest):
+    """Apply user feedback to a reasoning run.
+
+    The feedback is stored on the corresponding memory episode and
+    influences how that episode is weighted during future recall.
+    """
+    if not deep_reasoner:
+        raise HTTPException(status_code=503, detail="Deep reasoning agent not ready")
+    if req.rating not in (-1, 0, 1):
+        raise HTTPException(status_code=400, detail="rating must be -1, 0, or 1")
+    ok = await deep_reasoner.submit_feedback(run_id, req.rating, req.note)
+    if not ok:
+        raise HTTPException(status_code=404, detail="unknown run_id or memory disabled")
+    return {"ok": True, "run_id": run_id, "rating": req.rating}
+
+
+@app.get("/api/reasoning/memory")
+async def reasoning_memory(q: Optional[str] = None, k: int = 10):
+    """Search the deep-reasoner episode memory.
+
+    * If ``q`` is supplied, performs semantic recall (top-k by
+      similarity * recency * feedback).
+    * Otherwise returns the most recent episodes.
+    """
+    if not deep_reasoner or not deep_reasoner.memory_store or not deep_reasoner.memory_store.enabled:
+        raise HTTPException(status_code=503, detail="Memory store not enabled")
+    k = max(1, min(50, k))
+    if q:
+        recalled = await deep_reasoner.memory_store.recall(q, k=k, max_age_days=None)
+        return {
+            "query": q,
+            "results": [
+                {
+                    "episode_id": r.episode.id,
+                    "goal": r.episode.goal,
+                    "summary": r.episode.summary,
+                    "timestamp": r.episode.timestamp,
+                    "score": r.episode.score,
+                    "similarity": round(r.similarity, 4),
+                    "final_score": round(r.final_score, 4),
+                }
+                for r in recalled
+            ],
+        }
+    episodes = deep_reasoner.memory_store.search_text("", limit=k)
+    return {
+        "query": None,
+        "results": [
+            {
+                "episode_id": e.id,
+                "goal": e.goal,
+                "summary": e.summary,
+                "timestamp": e.timestamp,
+                "score": e.score,
+            }
+            for e in episodes
+        ],
+    }
+
+
+@app.get("/api/reasoning/plans")
+async def reasoning_plans(status: Optional[str] = None, limit: int = 50):
+    """List recent plan proposals (newest first).
+
+    Filter by ``status`` (``pending``, ``approved``, ``executed``,
+    ``executed_with_errors``, ``rejected``).
+    """
+    if not deep_reasoner or deep_reasoner.plan_store is None:
+        raise HTTPException(status_code=503, detail="Plan store not enabled")
+    limit = max(1, min(200, limit))
+    plans = deep_reasoner.plan_store.list(status=status, limit=limit)
+    return {"count": len(plans), "plans": [p.to_dict() for p in plans]}
+
+
+@app.get("/api/reasoning/plans/{plan_id}")
+async def reasoning_plan_get(plan_id: str):
+    if not deep_reasoner or deep_reasoner.plan_store is None:
+        raise HTTPException(status_code=503, detail="Plan store not enabled")
+    plan = deep_reasoner.plan_store.get(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="plan not found")
+    return plan.to_dict()
+
+
+@app.post("/api/reasoning/plans/{plan_id}/execute")
+async def reasoning_plan_execute(plan_id: str):
+    """Replay an approved plan against the real tools.
+
+    Idempotent: if the plan has already been executed, returns the
+    previously-recorded results. Reasoning is not re-run.
+    """
+    if not deep_reasoner or deep_reasoner.plan_store is None:
+        raise HTTPException(status_code=503, detail="Plan store not enabled")
+    out = await deep_reasoner.execute_plan(plan_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="plan not found")
+    return out
+
+
+@app.post("/api/reasoning/plans/{plan_id}/reject")
+async def reasoning_plan_reject(plan_id: str):
+    if not deep_reasoner or deep_reasoner.plan_store is None:
+        raise HTTPException(status_code=503, detail="Plan store not enabled")
+    ok = await deep_reasoner.reject_plan(plan_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="plan not found")
+    return {"plan_id": plan_id, "status": "rejected"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 / Milestone F — proactive triggers
+# ---------------------------------------------------------------------------
+class TriggerPayload(BaseModel):
+    """Inbound trigger create/update body."""
+    name: str
+    type: str  # "cron" | "state"
+    goal_template: str
+    enabled: bool = True
+    cron: Optional[str] = None
+    entity_id: Optional[str] = None
+    state_pattern: Optional[str] = None
+    sustained_seconds: int = 0
+    cooldown_seconds: int = 600
+    mode: str = "auto"
+    extra_context: Optional[Dict[str, Any]] = None
+
+
+def _payload_to_spec(p: TriggerPayload, *, existing: Optional[TriggerSpec] = None) -> TriggerSpec:
+    return TriggerSpec(
+        id=existing.id if existing else "",
+        name=p.name,
+        type=p.type,
+        goal_template=p.goal_template,
+        enabled=p.enabled,
+        cron=p.cron,
+        entity_id=p.entity_id,
+        state_pattern=p.state_pattern,
+        sustained_seconds=p.sustained_seconds,
+        cooldown_seconds=p.cooldown_seconds,
+        mode=p.mode,
+        extra_context=p.extra_context or {},
+        created_at=existing.created_at if existing else datetime.now().isoformat(),
+        last_fired_at=existing.last_fired_at if existing else None,
+    )
+
+
+@app.get("/api/triggers")
+async def triggers_list(enabled_only: bool = False):
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    return {"triggers": [t.to_dict() for t in trigger_registry.list(enabled_only=enabled_only)]}
+
+
+@app.post("/api/triggers")
+async def triggers_create(payload: TriggerPayload):
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    try:
+        spec = _payload_to_spec(payload)
+        spec = await trigger_registry.add(spec)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return spec.to_dict()
+
+
+@app.get("/api/triggers/fires")
+async def triggers_all_fires(limit: int = 50):
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    limit = max(1, min(500, limit))
+    fires = trigger_registry.list_fires(limit=limit)
+    return {"fires": [f.to_dict() for f in fires]}
+
+
+@app.get("/api/triggers/{trigger_id}")
+async def triggers_get(trigger_id: str):
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    spec = trigger_registry.store.get(trigger_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="trigger not found")
+    return spec.to_dict()
+
+
+@app.put("/api/triggers/{trigger_id}")
+async def triggers_update(trigger_id: str, payload: TriggerPayload):
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    existing = trigger_registry.store.get(trigger_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="trigger not found")
+    try:
+        spec = _payload_to_spec(payload, existing=existing)
+        spec.id = trigger_id
+        await trigger_registry.update(spec)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return spec.to_dict()
+
+
+@app.delete("/api/triggers/{trigger_id}")
+async def triggers_delete(trigger_id: str):
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    ok = await trigger_registry.delete(trigger_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="trigger not found")
+    return {"trigger_id": trigger_id, "deleted": True}
+
+
+@app.get("/api/triggers/{trigger_id}/fires")
+async def triggers_fires(trigger_id: str, limit: int = 50):
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    if trigger_registry.store.get(trigger_id) is None:
+        raise HTTPException(status_code=404, detail="trigger not found")
+    limit = max(1, min(500, limit))
+    fires = trigger_registry.list_fires(trigger_id=trigger_id, limit=limit)
+    return {"fires": [f.to_dict() for f in fires]}
+
+
+@app.post("/api/triggers/{trigger_id}/fire")
+async def triggers_test_fire(trigger_id: str):
+    """Manually fire a trigger \u2014 useful for testing the goal template
+    without waiting for the natural condition."""
+    if not trigger_registry:
+        raise HTTPException(status_code=503, detail="Trigger registry not ready")
+    spec = trigger_registry.store.get(trigger_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="trigger not found")
+    await trigger_registry._fire(spec, reason="manual test")
+    fires = trigger_registry.list_fires(trigger_id=trigger_id, limit=1)
+    return {"trigger_id": trigger_id, "last_fire": fires[0].to_dict() if fires else None}
+
+
 @app.get("/api/agents", response_model=List[AgentStatus])
 async def get_agents():
     """Get status of all agents"""
@@ -468,9 +1125,9 @@ async def get_agents():
                 with open(last_decision_file, "r") as f:
                     data = json.load(f)
                     last_decision = data.get("timestamp")
-            except:
+            except (OSError, json.JSONDecodeError, KeyError):
                 pass
-        
+
         status_list.append(AgentStatus(
             agent_id=agent_id,
             name=agent.name,
@@ -515,7 +1172,7 @@ async def get_decisions(limit: int = 100, agent_id: Optional[str] = None):
                 data = json.load(f)
                 # Normalize schema if needed
                 decisions.append(data)
-        except:
+        except (OSError, json.JSONDecodeError):
             continue
             
     return decisions
@@ -626,7 +1283,7 @@ async def get_config():
         "smart_model": os.getenv("SMART_MODEL", "deepseek-r1:8b"),
         "fast_model": os.getenv("FAST_MODEL", "mistral:7b-instruct"),
         "version": VERSION,
-        "gemini_active": orchestrator.gemini_model is not None if orchestrator else False,
+        "gemini_active": orchestrator._genai_client is not None if orchestrator else False,
         "use_gemini_for_dashboard": orchestrator.use_gemini_for_dashboard if orchestrator else False,
         "gemini_model_name": orchestrator.gemini_model_name if orchestrator else "gemini-1.5-pro",
         "agents": {
@@ -660,17 +1317,19 @@ async def update_config(req: UpdateConfigRequest):
             print(f"🔄 Runtime Config Update: Use Gemini for Dashboard set to {req.use_gemini_for_dashboard}")
         
         if req.gemini_api_key is not None:
-            import google.generativeai as genai
             orchestrator.gemini_api_key = req.gemini_api_key
-            genai.configure(api_key=req.gemini_api_key)
-            # Re-init model with current or new model name
-            orchestrator.gemini_model = genai.GenerativeModel(orchestrator.gemini_model_name)
+            # Re-initialize Gemini client with new key using new SDK
+            try:
+                from google import genai as _genai_module
+                orchestrator._genai_client = _genai_module.Client(api_key=req.gemini_api_key)
+                orchestrator.gemini_model = True
+            except ImportError:
+                orchestrator._genai_client = None
+                orchestrator.gemini_model = None
             print(f"🔄 Runtime Config Update: Gemini API Key updated")
 
         if req.gemini_model_name is not None:
-            import google.generativeai as genai
             orchestrator.gemini_model_name = req.gemini_model_name
-            orchestrator.gemini_model = genai.GenerativeModel(req.gemini_model_name)
             print(f"🔄 Runtime Config Update: Gemini Model set to {req.gemini_model_name}")
 
     return {

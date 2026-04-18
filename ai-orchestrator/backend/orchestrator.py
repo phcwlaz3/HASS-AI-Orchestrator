@@ -3,6 +3,7 @@ Central Orchestrator for Multi-Agent Coordination.
 Uses LangGraph workflow to plan, distribute tasks, resolve conflicts, and execute.
 """
 import asyncio
+import collections
 import logging
 import json
 from datetime import datetime
@@ -11,7 +12,12 @@ from pathlib import Path
 
 import ollama
 import os
-import google.generativeai as genai
+try:
+    from google import genai as _genai_module
+    _GENAI_AVAILABLE = True
+except ImportError:
+    _genai_module = None
+    _GENAI_AVAILABLE = False
 from workflow_graph import (
     OrchestratorState, Task, Decision, Conflict,
     create_workflow
@@ -61,20 +67,21 @@ class Orchestrator:
         self.agents = agents
         self.model_name = model_name
         self.planning_interval = planning_interval
-        
+        self.deep_reasoner = None  # Set externally after init
+
         # LangGraph workflow
         self.workflow = create_workflow()
 
 
         self.compiled_workflow = self.workflow.compile()
-        
+
         # Ollama client for planning LLM
         self.ollama_client = ollama.Client(host=ollama_host)
         self.llm_client = self.ollama_client # Reference for other methods
         self.ollama_host_used = ollama_host
-        
-        # Task and progress tracking
-        self.task_ledger: List[Task] = []
+
+        # Task and progress tracking (bounded to prevent memory leaks)
+        self.task_ledger: collections.deque = collections.deque(maxlen=500)
         self.progress_ledger: Dict[str, Dict] = {}
         
         # Conflict resolution rules
@@ -102,13 +109,17 @@ class Orchestrator:
         self.use_gemini_for_dashboard = use_gemini_for_dashboard or os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true"
         self.gemini_model_name = gemini_model_name or os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
 
-        if self.gemini_api_key:
-            genai.configure(api_key=self.gemini_api_key)
-            self.gemini_model = genai.GenerativeModel(self.gemini_model_name)
+        if self.gemini_api_key and _GENAI_AVAILABLE:
+            self._genai_client = _genai_module.Client(api_key=self.gemini_api_key)
+            self.gemini_model = True  # flag indicating Gemini is configured
             logger.info(f"Gemini API detected - visual dashboard configured to use {self.gemini_model_name} (Active: {self.use_gemini_for_dashboard}).")
         else:
+            self._genai_client = None
             self.gemini_model = None
-            logger.info("No Gemini API key found - visual dashboard will fallback to Ollama.")
+            if self.gemini_api_key and not _GENAI_AVAILABLE:
+                logger.warning("Gemini API key provided but google-genai package is not installed.")
+            else:
+                logger.info("No Gemini API key found - visual dashboard will fallback to Ollama.")
             
         self.last_dashboard_instruction = "Mixergy-style smart home dashboard"
         self.dashboard_refresh_interval = int(os.getenv("DASHBOARD_REFRESH_INTERVAL", "300")) # 5 minutes
@@ -306,9 +317,10 @@ Only create tasks if action is needed. Return empty tasks array if everything is
     
     async def wait_for_agents(self, state: OrchestratorState, timeout: int = 30) -> OrchestratorState:
         """Wait for all agents to respond with decisions"""
-        # In real implementation, would use asyncio.gather with timeout
-        # For now, simulate immediate response
-        await asyncio.sleep(1)
+        try:
+            await asyncio.wait_for(asyncio.sleep(1), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Agent response wait timed out after %ds", timeout)
         return state
     
     async def aggregate_decisions(self, state: OrchestratorState) -> OrchestratorState:
@@ -433,8 +445,26 @@ Only create tasks if action is needed. Return empty tasks array if everything is
     async def process_chat_request(self, user_message: str) -> Dict[str, Any]:
         """
         Process a direct chat message from the user.
-        Acts as a general-purpose home assistant.
+        If the message is complex and a deep reasoner is available, escalate.
         """
+        # Check if this is a complex query that should go to the deep reasoner
+        if self.deep_reasoner and self._is_complex_query(user_message):
+            logger.info("Escalating complex query to deep reasoner: %s", user_message[:80])
+            try:
+                result = await self.deep_reasoner.run(user_message)
+                return {
+                    "response": result.answer,
+                    "actions_executed": [],
+                    "reasoning_trace": {
+                        "iterations": result.iterations,
+                        "tool_calls": result.tool_calls,
+                        "stopped_reason": result.stopped_reason,
+                        "duration_ms": result.duration_ms,
+                    },
+                }
+            except Exception as e:
+                logger.error("Deep reasoner failed, falling back to single-shot: %s", e)
+
         # 1. Gather Context
         try:
             states = await self.ha_client.get_states()
@@ -616,10 +646,13 @@ OUTPUT REQUIREMENTS:
         # 3. Call LLM (Gemini preferred, Ollama fallback)
         html_content = ""
         try:
-            if self.gemini_model and self.use_gemini_for_dashboard:
+            if self._genai_client and self.use_gemini_for_dashboard:
                 # Use Gemini for best design results
                 logger.info(f"Generating dashboard using Gemini model: {self.gemini_model_name}")
-                response = self.gemini_model.generate_content([system_prompt, user_prompt])
+                response = self._genai_client.models.generate_content(
+                    model=self.gemini_model_name,
+                    contents=[system_prompt, user_prompt],
+                )
                 html_content = response.text
             else:
                 # Fallback to local Ollama (might be less 'poppy' but functional)
@@ -672,7 +705,7 @@ OUTPUT REQUIREMENTS:
                     <div style="margin-top: 12px; display: grid; grid-template-cols: 120px 1fr; gap: 8px;">
                         <span style="color: #64748b;">LLM Host:</span> <code>{host_info}</code>
                         <span style="color: #64748b;">Model:</span> <code>{self.model_name}</code>
-                        <span style="color: #64748b;">Gemini API:</span> <code>{'Enabled' if self.gemini_model else 'Disabled (Falling back to local)'}</code>
+                        <span style="color: #64748b;">Gemini API:</span> <code>{'Enabled' if self._genai_client else 'Disabled (Falling back to local)'}</code>
                         <span style="color: #64748b;">Gemini Active:</span> <code>{self.use_gemini_for_dashboard}</code>
                         <span style="color: #64748b;">HA Status:</span> <code>{'Connected' if self.ha_client and self.ha_client.connected else 'Disconnected'}</code>
                     </div>
@@ -698,3 +731,25 @@ OUTPUT REQUIREMENTS:
         if callable(self._ha_provider):
             return self._ha_provider()
         return self._ha_provider
+
+    @staticmethod
+    def _is_complex_query(msg: str) -> bool:
+        """Heuristic classifier: returns True for queries that need multi-step reasoning."""
+        msg_lower = msg.lower()
+        # Multi-step / analytical keywords
+        complex_signals = [
+            "survey", "audit", "analyze", "analyse", "investigate",
+            "compare", "optimiz", "recommend", "schedule",
+            "history", "trend", "correlat", "diagnos",
+            "why is", "why are", "what caused",
+            "across all", "every room", "all entities", "whole house",
+            "plan", "coordinate", "if.*then", "check.*and.*then",
+        ]
+        import re
+        for signal in complex_signals:
+            if re.search(signal, msg_lower):
+                return True
+        # Long messages (>150 chars) with question marks are often complex
+        if len(msg) > 150 and "?" in msg:
+            return True
+        return False

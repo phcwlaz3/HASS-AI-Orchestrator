@@ -1,12 +1,12 @@
 import pytest
 import json
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, NonCallableMagicMock, patch
 from agents.universal_agent import UniversalAgent
 from mcp_server import MCPServer
 
 @pytest.fixture
 def mock_ha_client():
-    client = MagicMock()
+    client = NonCallableMagicMock()
     client.get_state = AsyncMock()
     client.call_service = AsyncMock()
     # Ensure success response for call_service to avoid "executed" check failures
@@ -81,7 +81,7 @@ async def test_agent_decide_and_execute(agent, mock_ha_client):
         
         # Verify HA client called
         mock_ha_client.call_service.assert_called_once()
-        call_args = mock_ha_client.call_service.call_args
-        assert call_args[0][0] == "light" # domain
-        assert call_args[0][1] == "turn_on" # service
-        assert call_args[0][2]["entity_id"] == "light.test_light"
+        call_kwargs = mock_ha_client.call_service.call_args.kwargs
+        assert call_kwargs["domain"] == "light"
+        assert call_kwargs["service"] == "turn_on"
+        assert call_kwargs["entity_id"] == "light.test_light"

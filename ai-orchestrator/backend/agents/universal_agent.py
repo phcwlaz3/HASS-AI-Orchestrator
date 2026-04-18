@@ -171,7 +171,18 @@ class UniversalAgent(BaseAgent):
                     print(f"❌ Entity Discovery Fatal Error: {e}")
                 return "Error: Could not discover entities. Please check Home Assistant connection."
 
-        # ... (rest of method unchanged)
+        # Static entities mode: fetch state for each assigned entity
+        for entity_id in self.entities:
+            try:
+                s = await self.ha_client.get_state(entity_id)
+                if s:
+                    friendly = s.get('attributes', {}).get('friendly_name', entity_id)
+                    val = s.get('state', 'unknown')
+                    states.append(f"{friendly} ({entity_id}): {val}")
+            except Exception:
+                states.append(f"{entity_id}: unavailable")
+
+        return "\n".join(states) if states else "No entity states available."
 
     async def gather_context(self) -> Dict:
         """

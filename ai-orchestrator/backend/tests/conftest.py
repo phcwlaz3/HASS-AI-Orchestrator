@@ -4,21 +4,24 @@ Pytest configuration and shared fixtures.
 import os
 import sys
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, NonCallableMagicMock
 from pathlib import Path
 
 # Add backend directory to path
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
-# Mock google.generativeai if not present
+# Mock google.genai if not present (new SDK)
 try:
-    import google.generativeai
+    from google import genai
 except ImportError:
     from unittest.mock import MagicMock
     mock_genai = MagicMock()
-    sys.modules["google.generativeai"] = mock_genai
-    print("⚠️ Mocked google.generativeai (not installed)")
+    # Ensure 'google' package namespace exists for 'from google import genai'
+    if "google" not in sys.modules:
+        sys.modules["google"] = MagicMock()
+    sys.modules["google.genai"] = mock_genai
+    print("⚠️ Mocked google.genai (not installed)")
 
 # Set test environment variables
 os.environ["HA_URL"] = "http://test-ha:8123"
@@ -34,9 +37,18 @@ os.environ["DECISION_INTERVAL"] = "10"
 @pytest.fixture
 def mock_ha_client():
     """Mock Home Assistant WebSocket client"""
-    client = AsyncMock()
+    client = NonCallableMagicMock()
     client.connected = True
     client.get_states = AsyncMock(return_value={
+        "entity_id": "climate.test_room",
+        "state": "heat",
+        "attributes": {
+            "current_temperature": 20.0,
+            "temperature": 21.0,
+            "hvac_mode": "heat"
+        }
+    })
+    client.get_state = AsyncMock(return_value={
         "entity_id": "climate.test_room",
         "state": "heat",
         "attributes": {

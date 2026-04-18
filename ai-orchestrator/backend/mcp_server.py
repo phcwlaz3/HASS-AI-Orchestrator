@@ -59,6 +59,40 @@ DEFAULT_HIGH_IMPACT_SERVICES = [
 
 DEFAULT_BLOCKED_DOMAINS = ["shell_command", "hassio", "script", "automation", "rest_command"]
 
+# Service-level allowlist: only these domain.service pairs are permitted.
+# If empty, falls back to domain-level checks only.
+DEFAULT_ALLOWED_SERVICES: List[str] = [
+    # Climate
+    "climate.set_temperature", "climate.set_hvac_mode", "climate.set_preset_mode",
+    "climate.turn_on", "climate.turn_off",
+    # Lights
+    "light.turn_on", "light.turn_off", "light.toggle",
+    # Switches
+    "switch.turn_on", "switch.turn_off", "switch.toggle",
+    # Covers
+    "cover.open_cover", "cover.close_cover", "cover.stop_cover", "cover.set_cover_position",
+    # Fans
+    "fan.turn_on", "fan.turn_off", "fan.set_percentage",
+    # Media
+    "media_player.turn_on", "media_player.turn_off", "media_player.volume_set",
+    "media_player.media_play", "media_player.media_pause",
+    # Input helpers
+    "input_boolean.turn_on", "input_boolean.turn_off", "input_boolean.toggle",
+    "input_select.select_option", "input_number.set_value",
+    # Scenes & buttons
+    "scene.turn_on", "button.press",
+    # Vacuum
+    "vacuum.start", "vacuum.stop", "vacuum.return_to_base",
+    # Water heater
+    "water_heater.set_temperature", "water_heater.set_operation_mode",
+    # Security (high-impact — routed through approval queue)
+    "lock.lock", "lock.unlock",
+    "alarm_control_panel.alarm_arm_home", "alarm_control_panel.alarm_arm_away",
+    "alarm_control_panel.alarm_disarm",
+    "camera.turn_on", "camera.turn_off",
+    "camera.enable_motion_detection", "camera.disable_motion_detection",
+]
+
 # Security Configuration Helpers
 def get_env_list(name: str, default: List[str]) -> List[str]:
     raw = os.getenv(name, "")
@@ -669,8 +703,16 @@ class MCPServer:
                 "allowed_domains": allowed_domains
             }
 
-        # 3. High-Impact Check: Redirect to Approval Queue
+        # 2b. Service-level allowlist: if configured, only permit specific services
         service_full_name = f"{domain}.{service}"
+        allowed_services = get_env_list("ALLOWED_SERVICES", DEFAULT_ALLOWED_SERVICES)
+        if allowed_services and service_full_name not in allowed_services:
+            return {
+                "error": f"Service '{service_full_name}' is not in the allowed services list.",
+                "executed": False,
+            }
+
+        # 3. High-Impact Check: Redirect to Approval Queue
         high_impact_services = get_env_list("HIGH_IMPACT_SERVICES", DEFAULT_HIGH_IMPACT_SERVICES)
         if service_full_name in high_impact_services:
             if self.approval_queue:

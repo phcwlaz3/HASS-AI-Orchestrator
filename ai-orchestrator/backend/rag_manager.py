@@ -5,6 +5,7 @@ and semantic search for agent context awareness.
 """
 import os
 import logging
+import asyncio
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Optional, Any
@@ -64,14 +65,18 @@ class RagManager:
         logger.info(f"RAG Manager initialized at {persist_dir} using {embedding_model}")
 
     def _generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding using Ollama"""
+        """Generate embedding using Ollama (sync, safe for thread executor)"""
         try:
             response = ollama.embeddings(model=self.embedding_model, prompt=text)
             return response["embedding"]
         except Exception as e:
             logger.error(f"Error generating embedding: {e}")
-            # Return zero vector fallback or raise
             raise
+
+    async def _generate_embedding_async(self, text: str) -> List[float]:
+        """Non-blocking wrapper — runs sync Ollama call in a thread executor."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._generate_embedding, text)
 
     def add_document(
         self, 

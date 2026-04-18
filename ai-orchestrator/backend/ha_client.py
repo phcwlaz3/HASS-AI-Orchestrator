@@ -47,7 +47,7 @@ class HAWebSocketClient:
         if self.ws:
             try:
                 await self.ws.close()
-            except:
+            except Exception:
                 pass
             self.ws = None
         print("📡 HA Client disconnected")
@@ -101,7 +101,7 @@ class HAWebSocketClient:
             if self.ws:
                 try:
                     await self.ws.close()
-                except:
+                except Exception:
                     pass
                 self.ws = None
             raise

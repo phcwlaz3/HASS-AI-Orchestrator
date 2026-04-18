@@ -1,11 +1,11 @@
 import pytest
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, NonCallableMagicMock
 from mcp_server import MCPServer
 
 @pytest.fixture
 def mock_ha_client():
-    client = MagicMock()
+    client = NonCallableMagicMock()
     client.call_service = AsyncMock(return_value={"success": True})
     return client
 
