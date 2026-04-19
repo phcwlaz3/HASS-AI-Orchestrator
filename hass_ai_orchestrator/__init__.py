@@ -3,6 +3,9 @@
 This package provides intelligent automation orchestration using multiple AI
 providers, enabling natural language control and autonomous decision-making
 for Home Assistant deployments.
+
+Personal fork: using this for my home lab setup. Tracking upstream changes
+from ITSpecialist111/HASS-AI-Orchestrator.
 """
 
 __version__ = "0.8.0"
