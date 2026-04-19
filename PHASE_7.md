@@ -42,6 +42,10 @@ loops as you wanted.
 > **Personal note (my fork):** I'm primarily using this for the deep
 > reasoning agent — the specialist agents are disabled in my setup.
 > See `options.json` for my local config.
+>
+> I've also bumped the default `max_tool_rounds` from 10 to 15 in
+> `reasoning_harness.py` — I found 10 wasn't enough for complex
+> multi-room automations that chain several MCP lookups before acting.
 
 ---
 
@@ -64,7 +68,5 @@ loops as you wanted.
 │   └── /api/dashboard/*   │  (Gemini-generated visual)          │
 │                                                                │
 │  Singletons (globals):                                         │
-│   ├── HAWebSocketClient   ── ws + reconnect loop               │
-│   ├── MCPServer           ── 15 local tools, validation,       │
-│   │                          dry-run, approval ro
+│   ├
 ```
