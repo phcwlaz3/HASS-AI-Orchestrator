@@ -45,6 +45,6 @@
 
 ---
 <!-- Personal fork notes:
-  - Testing Gemini flash model (gemini-1.5-flash) as a cheaper alternative to the robotics preview model
-  - May tweak the dashboard refresh interval from 5 min to 10 min to reduce API calls
+  - I changed the dashboard background refresh interval from 5 min to 2 min in main.py
+    to get snappier updates on my local setup. May revert if it causes CPU issues.
 -->
