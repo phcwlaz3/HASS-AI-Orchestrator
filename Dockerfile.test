@@ -28,4 +28,5 @@ WORKDIR /app/backend
 
 # Run smoke tests
 # Increased timeout to 60s since my local machine can be slow
-CMD ["pytest", "-m", "smoke", "-v", "--tb=short", "--timeout=60"]
+# Added --cov-report=term-missing so I can see exactly which lines aren't covered
+CMD ["pytest", "-m", "smoke", "-v", "--tb=short", "--timeout=60", "--cov=.", "--cov-report=term-missing"]
