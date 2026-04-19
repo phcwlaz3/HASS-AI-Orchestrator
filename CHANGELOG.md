@@ -44,7 +44,8 @@
 - **Connectivity Fallback**: Implemented automatic fallback to Direct Core Access (`http://homeassistant:8123`) when
 
 ---
-<!-- Personal fork notes:
-  - I changed the dashboard background refresh interval from 5 min to 2 min in main.py
-    to get snappier updates on my local setup. May revert if it causes CPU issues.
+<!-- Personal notes (my fork):
+  - I increased the background dashboard refresh interval from 5 min to 10 min in main.py
+    to reduce API call volume on my free-tier Gemini key.
+  - Tested on HA OS 12.1 with Ollama running llama3.2 locally — works well.
 -->
