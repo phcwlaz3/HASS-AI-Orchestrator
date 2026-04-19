@@ -43,9 +43,12 @@ loops as you wanted.
 > reasoning agent — the specialist agents are disabled in my setup.
 > See `options.json` for my local config.
 >
-> I've also bumped the default `max_tool_rounds` from 10 to 15 in
-> `reasoning_harness.py` — I found 10 wasn't enough for complex
+> I've also bumped the default `max_tool_rounds` from 10 to 15 ness.py` — I found 10 wasn't enough for complex
 > multi-room automations that chain several MCP lookups before acting.
+>
+> Additionally raised `parallel_tool_limit` from 4 to 6 in
+> `reasoning_harness.py` — my home server has headroom and the
+> speedup on wide MCP fan-outs is noticeable.
 
 ---
 
@@ -65,8 +68,5 @@ loops as you wanted.
 │   ├── /api/decisions     │                                     │
 │   ├── /api/approvals     │                                     │
 │   ├── /api/factory/*     │  (no-code agent factory)            │
-│   └── /api/dashboard/*   │  (Gemini-generated visual)          │
-│                                                                │
-│  Singletons (globals):                                         │
-│   ├
+│  
 ```
