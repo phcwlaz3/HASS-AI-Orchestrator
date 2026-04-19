@@ -53,7 +53,7 @@ smart_model: "deepseek-r1:8b"         # Complex Agents (Reasoning)
 fast_model: "mistral:7b-instruct"     # Fast Agents (Execution)
 ```
 
-> **Personal note:** I'm running Ollama on a separate machine at 192.168.1.50, so I set `ollama_host` to `http://192.168.1.50:11434`. Also switched `fast_model` to `phi3:mini` since it runs noticeably faster on my setup than mistral.
+> **Personal note:** I'm running Ollama on a separate machine at 192.168.1.50, so I set `ollama_host` to `http://192.168.1.50:11434`. Also switched `fast_model` to `phi3:mini` since it runs noticeably faster on my setup than mistral. Additionally, I set `log_level` to `"debug"` temporarily while getting things dialed in — helped a lot for troubleshooting agent decisions. Switch it back to `"info"` once things are stable or the logs get overwhelming fast.
 
 #### 4. Start
 Click **Start**. Monitor the **Log** tab.
@@ -78,9 +78,4 @@ Navigate to: `http://homeassistant.local:8999`
 
 ### 1. The Dashboard
 - **Live Ops**: See your agents (Heating, Security, etc.) pulsing when they "think".
-- **Analytics**: View decision history charts.
-- **Knowledge**: Watch the "Brain" icon light up when agents read manuals.
-
-### 2. Creating Your First Agent (No-Code)
-1. Click the **(+) New Agent** button (bottom right).
-2. Valid "Suggested" agents bas
+- **Analytics**:
