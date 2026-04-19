@@ -15,6 +15,9 @@ from .base import BaseProvider, ProviderConfig, ProviderResponse
 
 logger = logging.getLogger(__name__)
 
+# Default timeout in seconds for API requests
+DEFAULT_TIMEOUT = 60
+
 
 class OpenAIProvider(BaseProvider):
     """Provider implementation for OpenAI's Chat Completion API."""
@@ -31,10 +34,12 @@ class OpenAIProvider(BaseProvider):
         """Initialize the AsyncOpenAI client."""
         api_key = self.config.api_key
         base_url = self.config.extra.get("base_url") if self.config.extra else None
+        timeout = self.config.extra.get("timeout", DEFAULT_TIMEOUT) if self.config.extra else DEFAULT_TIMEOUT
 
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
+            timeout=timeout,
         )
         logger.info("OpenAI provider initialized (model=%s)", self.config.model)
 
@@ -96,8 +101,12 @@ class OpenAIProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         """Stream tokens from OpenAI one chunk at a time.
 
+        Args:
+            messages: List of role/content dicts compatible with OpenAI API.
+            **kwargs: Additional parameters forwarded to the API call.
+
         Yields:
-            Partial content strings as they arrive.
+            String chunks of the assistant response as they arrive.
         """
         if self._client is None:
             await self.initialize()
@@ -111,6 +120,8 @@ class OpenAIProvider(BaseProvider):
         }
         params.update(kwargs)
         params = {k: v for k, v in params.items() if v is not None}
+
+        logger.debug("OpenAI stream request: model=%s, messages=%d", params["model"], len(messages))
 
         async with await self._client.chat.completions.create(**params) as stream:  # type: ignore[arg-type]
             async for chunk in stream:
