@@ -6,6 +6,9 @@ for Home Assistant deployments.
 
 Personal fork: using this for my home lab setup. Tracking upstream changes
 from ITSpecialist111/HASS-AI-Orchestrator.
+
+Fork notes:
+- Added __author__ to __all__ for easier introspection when debugging
 """
 
 __version__ = "0.8.0"
@@ -19,4 +22,5 @@ __all__ = [
     "Orchestrator",
     "OrchestratorConfig",
     "__version__",
+    "__author__",
 ]
