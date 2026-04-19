@@ -50,6 +50,10 @@ finding).
 > for the pre-flight recall in D2 — my home assistant instance is on a
 > Raspberry Pi 4 and the extra context noticeably slows the first LLM call.
 > Will revisit if recall quality suffers.
+>
+> Also setting the episode summary target to ~150 tokens instead of ~200 —
+> shorter summaries seem to work fine for my use cases and keep memory
+> retrieval snappier on low-RAM hardware.
 
 ---
 
@@ -61,5 +65,4 @@ for human approval, then replay deterministically.
 | # | Task | Files |
 |---|---|---|
 | **E1** | Add `mode: "plan" \| "execute" \| "auto"` to `POST /api/reasoning/run` (default `auto`) | `main.py`, `agents/deep_reasoning_agent.py` |
-| **E2** | `DryRunInterceptor` wraps every mutating tool executor in `ToolRegistry`; returns synthetic success and records the intent. Read-only tools pass through. Classification driven by tool name patterns (`set_*`, `turn_*`, `lock`, `unlock`, etc.) plus an explicit `read_only_tools` set | `reasoning_harness.py` |
-| **E3** | `PlanProposal {id, steps, risk_summary, requires_approval}` returned in p
+| **E2** | `DryRunInterceptor` wraps every mutating tool executor in `ToolRegistry`; returns synthetic success and records the intent. Re
