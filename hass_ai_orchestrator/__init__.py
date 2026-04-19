@@ -9,6 +9,7 @@ from ITSpecialist111/HASS-AI-Orchestrator.
 
 Fork notes:
 - Added __author__ to __all__ for easier introspection when debugging
+- Added __license__ to __all__ for completeness
 """
 
 __version__ = "0.8.0"
@@ -23,4 +24,5 @@ __all__ = [
     "OrchestratorConfig",
     "__version__",
     "__author__",
+    "__license__",
 ]
