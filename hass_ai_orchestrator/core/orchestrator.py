@@ -20,7 +20,7 @@ class OrchestratorConfig:
     hass_url: str
     hass_token: str
     default_model: str = "gpt-4o-mini"
-    max_context_length: int = 20
+    max_context_length: int = 50  # increased from 20 - 20 felt too short for longer conversations
     timeout: int = 30
     enable_memory: bool = True
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -87,33 +87,3 @@ class Orchestrator:
 
     def get_history(self) -> List[Dict[str, str]]:
         """Return conversation history as plain dicts (suitable for API calls)."""
-        return [{"role": m.role, "content": m.content} for m in self._conversation_history]
-
-    def clear_history(self) -> None:
-        """Reset conversation context."""
-        self._conversation_history.clear()
-        logger.debug("Conversation history cleared")
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    async def start(self) -> None:
-        """Perform async startup tasks (provider warm-up, HASS handshake)."""
-        if self._running:
-            logger.warning("Orchestrator already running")
-            return
-        logger.info("Starting orchestrator…")
-        self._running = True
-
-    async def stop(self) -> None:
-        """Gracefully shut down the orchestrator."""
-        if not self._running:
-            return
-        logger.info("Stopping orchestrator…")
-        self._running = False
-
-    @property
-    def is_running(self) -> bool:
-        """True when the orchestrator has been started."""
-        return self._running
