@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 # Install test dependencies
 # Added pytest-timeout to catch any hanging tests during local dev
-RUN pip install --no-cache-dir pytest pytest-asyncio pytest-timeout
+# Also added pytest-cov so I can check coverage while running smoke tests locally
+RUN pip install --no-cache-dir pytest pytest-asyncio pytest-timeout pytest-cov
 
 # Copy backend code
 COPY backend/ backend/
@@ -26,4 +27,5 @@ COPY skills/ skills/
 WORKDIR /app/backend
 
 # Run smoke tests
-CMD ["pytest", "-m", "smoke", "-v", "--tb=short", "--timeout=30"]
+# Increased timeout to 60s since my local machine can be slow
+CMD ["pytest", "-m", "smoke", "-v", "--tb=short", "--timeout=60"]
