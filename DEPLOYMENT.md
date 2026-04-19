@@ -55,6 +55,8 @@ fast_model: "mistral:7b-instruct"     # Fast Agents (Execution)
 
 > **Personal note:** I'm running Ollama on a separate machine at 192.168.1.50, so I set `ollama_host` to `http://192.168.1.50:11434`. Also switched `fast_model` to `phi3:mini` since it runs noticeably faster on my setup than mistral. Additionally, I set `log_level` to `"debug"` temporarily while getting things dialed in — helped a lot for troubleshooting agent decisions. Switch it back to `"info"` once things are stable or the logs get overwhelming fast.
 
+> **Additional note:** I also set `dry_run_mode` to `false` after about a day of testing once I confirmed the agents were behaving sensibly. Worth leaving it `true` longer if you have complex automations or locks involved — the Human Approval queue (see Security Features below) gives a good safety net either way.
+
 #### 4. Start
 Click **Start**. Monitor the **Log** tab.
 
@@ -68,14 +70,4 @@ The AI Orchestrator now enforces strict tool safety:
 ### Option 2: Manual Install (Legacy)
 1. Copy the `ai-orchestrator` folder to `/addons/` on your HA host.
 2. Restart Supervisor.
-3. Install via Local Add-ons list.
-
----
-
-## 🎮 Getting Started (Dashboard)
-
-Navigate to: `http://homeassistant.local:8999`
-
-### 1. The Dashboard
-- **Live Ops**: See your agents (Heating, Security, etc.) pulsing when they "think".
-- **Analytics**:
+3. Install via Local
